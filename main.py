@@ -1,7 +1,6 @@
 import vacefron
 import time
 import random
-import sqlite3
 import discord
 from discord.ext import commands
 import os
@@ -9,6 +8,10 @@ from dotenv import load_dotenv # type: ignore
 import pytz # type: ignore
 from datetime import datetime
 import asyncio
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, PrimaryKeyConstraint
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import IntegrityError
 
 # Setting discord bot intents
 intents = discord.Intents.all()
@@ -17,55 +20,63 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 # Loading .env
 load_dotenv()
 
-# DB name
-DATABASE = "levels.sqlite"
+# Database setup with SQLAlchemy
+DATABASE_URL = "sqlite:///levels.sqlite"
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-# Database connection thang
-database = sqlite3.connect(DATABASE)
-cursor = database.cursor()
+# Database Models
+class User(Base):
+    __tablename__ = "users"
+    
+    user_id = Column(Integer, primary_key=True)
+    user_name = Column(Text)
+    level = Column(Integer)
+    xp = Column(Integer)
+    levelup_xp = Column(Integer)
 
-# Makes users db if not there (GLOBAL)
-cursor.execute("""CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    user_name TEXT,
-    level INTEGER,
-    xp INTEGER,
-    levelup_xp INTEGER
-)""")
+class ExpCooldown(Base):
+    __tablename__ = "exp_cooldowns"
+    
+    guild_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, primary_key=True)
+    last_exp_time = Column(Float)
 
-# Cooldown table: stores last exp time per user per guild
-cursor.execute("""CREATE TABLE IF NOT EXISTS exp_cooldowns (
-    guild_id INTEGER,
-    user_id INTEGER,
-    last_exp_time REAL,
-    PRIMARY KEY (guild_id, user_id)
-)""")
+class MessageLog(Base):
+    __tablename__ = "message_logs"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer)
+    message_link = Column(Text)
+    message_content = Column(Text)
+    channel_id = Column(Integer)
+    channel_link = Column(Text)
+    message_author_name = Column(Text)
+    message_author_id = Column(Integer)
+    date_and_time_sent = Column(Text)
+    guild_id = Column(Integer)
+    guild_invite_link = Column(Text)
 
-# Message log table
-cursor.execute("""CREATE TABLE IF NOT EXISTS message_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id INTEGER,
-    message_link TEXT,
-    message_content TEXT,
-    channel_id INTEGER,
-    channel_link TEXT,
-    message_author_name TEXT,
-    message_author_id INTEGER,
-    date_and_time_sent TEXT,
-    guild_id INTEGER,
-    guild_invite_link TEXT
-)""")
+class LevelUpChannel(Base):
+    __tablename__ = "level_up_channels"
+    
+    guild_id = Column(Integer, primary_key=True)
+    channel_id = Column(Integer, primary_key=True)
 
-# Level Up Channel Table
-cursor.execute("""CREATE TABLE IF NOT EXISTS level_up_channels (
-    guild_id INTEGER,
-    channel_id INTEGER,
-    PRIMARY KEY (guild_id, channel_id)
-)""")
-database.commit()
+# Create tables
+Base.metadata.create_all(bind=engine)
 
 # Cache for permanent invites {guild_id: invite_url}
 guild_invite_cache = {}
+
+# Database helper functions
+def get_db():
+    db = SessionLocal()
+    try:
+        return db
+    finally:
+        pass  # Don't close here, close in calling function
 
 # Rotating status task
 async def rotate_status():
@@ -77,11 +88,9 @@ async def rotate_status():
         await asyncio.sleep(20)
         # Status 2: Number of unique users tracked in the database
         try:
-            conn = sqlite3.connect(DATABASE)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(DISTINCT user_id) FROM users")
-            user_count = cur.fetchone()[0]
-            conn.close()
+            db = get_db()
+            user_count = db.query(User.user_id).distinct().count()
+            db.close()
         except Exception:
             user_count = "?"
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{user_count} users"))
@@ -99,52 +108,94 @@ async def on_ready():
     bot.loop.create_task(rotate_status())
 
 # Gets level up channels for a guild
-def get_level_up_channels(conn, guild_id):
-    cur = conn.cursor()
-    cur.execute("SELECT channel_id FROM level_up_channels WHERE guild_id=?", (guild_id,))
-    return [row[0] for row in cur.fetchall()]
+def get_level_up_channels(guild_id):
+    db = get_db()
+    try:
+        channels = db.query(LevelUpChannel.channel_id).filter(LevelUpChannel.guild_id == guild_id).all()
+        return [channel.channel_id for channel in channels]
+    finally:
+        db.close()
 
 # Adds a channel id to the level_up_channels table
-def add_level_up_channel(conn, guild_id, channel_id):
-    cur = conn.cursor()
+def add_level_up_channel(guild_id, channel_id):
+    db = get_db()
     try:
-        cur.execute("INSERT INTO level_up_channels (guild_id, channel_id) VALUES (?, ?)", (guild_id, channel_id))
-        conn.commit()
+        new_channel = LevelUpChannel(guild_id=guild_id, channel_id=channel_id)
+        db.add(new_channel)
+        db.commit()
         return True
-    except sqlite3.IntegrityError:
-        # Channel already exists
+    except IntegrityError:
+        db.rollback()
         return False
+    finally:
+        db.close()
 
 # Gets user (GLOBAL)
-def get_user(conn, user_id):
-    cur = conn.cursor()
-    cur.execute("SELECT level, xp, levelup_xp FROM users WHERE user_id=?", (user_id,))
-    return cur.fetchone()
+def get_user(user_id):
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if user:
+            return (user.level, user.xp, user.levelup_xp)
+        return None
+    finally:
+        db.close()
 
 # Adds or updates users (GLOBAL)
-def add_or_update_user(conn, user_id, user_name, level, xp, levelup_xp):
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO users (user_id, user_name, level, xp, levelup_xp) VALUES (?, ?, ?, ?, ?)",
-        (user_id, user_name, level, xp, levelup_xp)
-    )
-    conn.commit()
+def add_or_update_user(user_id, user_name, level, xp, levelup_xp):
+    db = get_db()
+    try:
+        user = db.query(User).filter(User.user_id == user_id).first()
+        if user:
+            user.user_name = user_name
+            user.level = level
+            user.xp = xp
+            user.levelup_xp = levelup_xp
+        else:
+            user = User(
+                user_id=user_id,
+                user_name=user_name,
+                level=level,
+                xp=xp,
+                levelup_xp=levelup_xp
+            )
+            db.add(user)
+        db.commit()
+    finally:
+        db.close()
 
 # Gets last time the user got granted exp (per guild cooldown)
-def get_last_exp_time(conn, guild_id, user_id):
-    cur = conn.cursor()
-    cur.execute("SELECT last_exp_time FROM exp_cooldowns WHERE guild_id=? AND user_id=?", (guild_id, user_id))
-    row = cur.fetchone()
-    return row[0] if row else None
+def get_last_exp_time(guild_id, user_id):
+    db = get_db()
+    try:
+        cooldown = db.query(ExpCooldown).filter(
+            ExpCooldown.guild_id == guild_id,
+            ExpCooldown.user_id == user_id
+        ).first()
+        return cooldown.last_exp_time if cooldown else None
+    finally:
+        db.close()
 
 # Sets the time that the user got their last amount of exp (per guild cooldown)
-def set_last_exp_time(conn, guild_id, user_id, timestamp):
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO exp_cooldowns (guild_id, user_id, last_exp_time) VALUES (?, ?, ?)",
-        (guild_id, user_id, timestamp)
-    )
-    conn.commit()
+def set_last_exp_time(guild_id, user_id, timestamp):
+    db = get_db()
+    try:
+        cooldown = db.query(ExpCooldown).filter(
+            ExpCooldown.guild_id == guild_id,
+            ExpCooldown.user_id == user_id
+        ).first()
+        if cooldown:
+            cooldown.last_exp_time = timestamp
+        else:
+            cooldown = ExpCooldown(
+                guild_id=guild_id,
+                user_id=user_id,
+                last_exp_time=timestamp
+            )
+            db.add(cooldown)
+        db.commit()
+    finally:
+        db.close()
 
 def get_message_content_with_attachments(message):
     content = message.content
@@ -170,7 +221,6 @@ async def get_or_create_permanent_invite(guild):
 
 # Message logging function
 async def log_message_to_db(message):
-    conn = sqlite3.connect(DATABASE)
     wa_tz = pytz.timezone('Australia/Perth')
     dt_wa = message.created_at.astimezone(wa_tz)
     message_content = get_message_content_with_attachments(message)
@@ -181,27 +231,24 @@ async def log_message_to_db(message):
     if guild_invite_link is None:
         guild_invite_link = "No invite available"
 
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO message_logs (
-            message_id, message_link, message_content, channel_id, channel_link,
-            message_author_name, message_author_id, date_and_time_sent,
-            guild_id, guild_invite_link
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        message.id,
-        message_link,
-        message_content,
-        message.channel.id,
-        channel_link,
-        str(message.author),
-        message.author.id,
-        dt_wa.strftime('%Y-%m-%d %H:%M:%S'),
-        message.guild.id,
-        guild_invite_link
-    ))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    try:
+        message_log = MessageLog(
+            message_id=message.id,
+            message_link=message_link,
+            message_content=message_content,
+            channel_id=message.channel.id,
+            channel_link=channel_link,
+            message_author_name=str(message.author),
+            message_author_id=message.author.id,
+            date_and_time_sent=dt_wa.strftime('%Y-%m-%d %H:%M:%S'),
+            guild_id=message.guild.id,
+            guild_invite_link=guild_invite_link
+        )
+        db.add(message_log)
+        db.commit()
+    finally:
+        db.close()
 
 # Main message event
 @bot.event
@@ -216,18 +263,17 @@ async def on_message(message):
     user_id = message.author.id
     user_name = str(message.author)
 
-    conn = sqlite3.connect(DATABASE)
     # Check cooldown (per guild)
-    last_exp_time = get_last_exp_time(conn, guild_id, user_id)
+    last_exp_time = get_last_exp_time(guild_id, user_id)
     now = time.time()
     can_give_exp = False
     if last_exp_time is None or now - last_exp_time >= 10:
         can_give_exp = True
-        set_last_exp_time(conn, guild_id, user_id, now)
+        set_last_exp_time(guild_id, user_id, now)
 
     if can_give_exp:
         exp_give = random.randint(1, 20)
-        user = get_user(conn, user_id)
+        user = get_user(user_id)
 
         if user is None:
             level, xp, levelup_xp = 1, 10, 100  # Starting values
@@ -242,35 +288,35 @@ async def on_message(message):
             levelup_xp = int(50 * level ** 2 + 100 * level + 50)  # Example formula
             leveled_up = True
 
-        add_or_update_user(conn, user_id, user_name, level, xp, levelup_xp)
+        add_or_update_user(user_id, user_name, level, xp, levelup_xp)
 
         if leveled_up:
             # Notify all level-up channels in all guilds
-            conn2 = sqlite3.connect(DATABASE)
-            cur = conn2.cursor()
-            cur.execute("SELECT guild_id, channel_id FROM level_up_channels")
-            for guild_id2, channel_id in cur.fetchall():
-                channel = bot.get_channel(channel_id)
-                if channel:
-                    try:
-                        await channel.send(f"<@{user_id}> leveled up to level {level}! 🎉")
-                    except Exception as e:
-                        print(f"Failed to send level up message in guild {guild_id2}, channel {channel_id}: {e}")
-            conn2.close()
-    conn.close()
+            db = get_db()
+            try:
+                channels = db.query(LevelUpChannel).all()
+                for channel_record in channels:
+                    channel = bot.get_channel(channel_record.channel_id)
+                    if channel:
+                        try:
+                            await channel.send(f"<@{user_id}> leveled up to level {level}! 🎉")
+                        except Exception as e:
+                            print(f"Failed to send level up message in guild {channel_record.guild_id}, channel {channel_record.channel_id}: {e}")
+            finally:
+                db.close()
 
     await bot.process_commands(message)
 
-# Leaderboard command (top 25 by EXP)
+# Leaderboard command (top 25 by Level)
 @bot.tree.command(name="leaderboard", description="Shows the top 25 users by Level.")
 async def leaderboard(interaction: discord.Interaction):
-    conn = sqlite3.connect(DATABASE)
-    cur = conn.cursor()
-    cur.execute("SELECT user_name, level FROM users ORDER BY level DESC LIMIT 25")
-    rows = cur.fetchall()
-    conn.close()
+    db = get_db()
+    try:
+        users = db.query(User.user_name, User.level).order_by(User.level.desc()).limit(25).all()
+    finally:
+        db.close()
 
-    if not rows:
+    if not users:
         await interaction.response.send_message("No users found in the leaderboard.", ephemeral=True)
         return
 
@@ -281,7 +327,7 @@ async def leaderboard(interaction: discord.Interaction):
     )
 
     leaderboard_text = ""
-    for idx, (user_name, level) in enumerate(rows, start=1):
+    for idx, (user_name, level) in enumerate(users, start=1):
         leaderboard_text += f"**{idx}.** `{user_name}` | **Level:** {level}\n"
 
     embed.add_field(name="Rankings", value=leaderboard_text, inline=False)
@@ -305,16 +351,13 @@ async def add_levelup_channel(interaction: discord.Interaction, channel: discord
         await interaction.response.send_message("I don't have permission to access that channel.", ephemeral=True)
         return
 
-    conn = sqlite3.connect(DATABASE)
-    existing_channels = get_level_up_channels(conn, interaction.guild.id)
+    existing_channels = get_level_up_channels(interaction.guild.id)
     if channel.id in existing_channels:
         await interaction.response.send_message("This channel is already set as a level-up channel.", ephemeral=True)
-        conn.close()
         return
 
     # Add channel
-    success = add_level_up_channel(conn, interaction.guild.id, channel.id)
-    conn.close()
+    success = add_level_up_channel(interaction.guild.id, channel.id)
 
     if success:
         await interaction.response.send_message(f"Channel {channel.mention} has been added as a level-up channel.", ephemeral=True)
