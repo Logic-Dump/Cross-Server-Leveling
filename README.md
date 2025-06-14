@@ -4,5 +4,5 @@
 
 # How to set up
 
-1. Make file called ``.env`` and add the value ``TOKEN=`` and put bot token in it
+1. Go to the ``.env`` file and put in your bot token and sqlite db (dont change to keep it as a local db)
 2. Run and enjoy
