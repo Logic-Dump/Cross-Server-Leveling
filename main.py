@@ -1,4 +1,3 @@
-import vacefron
 import time
 import random
 import discord
@@ -8,9 +7,8 @@ from dotenv import load_dotenv # type: ignore
 import pytz # type: ignore
 from datetime import datetime
 import asyncio
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, PrimaryKeyConstraint
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float, Text, PrimaryKeyConstraint
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import IntegrityError
 
 # Setting discord bot intents
@@ -21,7 +19,7 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 load_dotenv()
 
 # Database setup with SQLAlchemy
-DATABASE_URL = "sqlite:///levels.sqlite"
+DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -30,7 +28,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     
-    user_id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
     user_name = Column(Text)
     level = Column(Integer)
     xp = Column(Integer)
@@ -39,30 +37,30 @@ class User(Base):
 class ExpCooldown(Base):
     __tablename__ = "exp_cooldowns"
     
-    guild_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, primary_key=True)
+    guild_id = Column(BigInteger, primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
     last_exp_time = Column(Float)
 
 class MessageLog(Base):
     __tablename__ = "message_logs"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    message_id = Column(Integer)
+    message_id = Column(BigInteger)
     message_link = Column(Text)
     message_content = Column(Text)
-    channel_id = Column(Integer)
+    channel_id = Column(BigInteger)
     channel_link = Column(Text)
     message_author_name = Column(Text)
-    message_author_id = Column(Integer)
+    message_author_id = Column(BigInteger)
     date_and_time_sent = Column(Text)
-    guild_id = Column(Integer)
+    guild_id = Column(BigInteger)
     guild_invite_link = Column(Text)
 
 class LevelUpChannel(Base):
     __tablename__ = "level_up_channels"
     
-    guild_id = Column(Integer, primary_key=True)
-    channel_id = Column(Integer, primary_key=True)
+    guild_id = Column(BigInteger, primary_key=True)
+    channel_id = Column(BigInteger, primary_key=True)
 
 # Create tables
 Base.metadata.create_all(bind=engine)
