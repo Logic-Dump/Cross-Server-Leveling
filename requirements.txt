@@ -3,3 +3,4 @@ python-dotenv==0.21.1
 pytz==2025.1
 requests==2.32.4
 SQLAlchemy==2.0.40
+psycopg2-binary
