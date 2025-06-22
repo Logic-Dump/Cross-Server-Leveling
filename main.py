@@ -93,7 +93,7 @@ async def rotate_status():
         # Status 1: Number of servers
         server_count = len(bot.guilds)
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{server_count} servers"))
-        await asyncio.sleep(1)
+        await asyncio.sleep(10)
         # Status 2: Number of unique users tracked in the database
         try:
             db = get_db()
@@ -102,11 +102,11 @@ async def rotate_status():
         except Exception:
             user_count = "?"
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{user_count} users"))
-        await asyncio.sleep(1)
+        await asyncio.sleep(10)
 
         msg_count = get_message_count()
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{msg_count} messages looked at"))
-        await asyncio.sleep(20)
+        await asyncio.sleep(10)
     
 
 # Event for when bot starts up
