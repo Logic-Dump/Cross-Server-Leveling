@@ -97,7 +97,7 @@ async def rotate_status():
 # Event for when bot starts up
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}, have fun with the leveling :)")
+    print(f"Logged in as {bot.user} with shard count of {bot.shard_count}, have fun with the leveling :)")
     try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} command(s) with Discord.")
@@ -297,7 +297,7 @@ async def on_message(message):
                     channel = bot.get_channel(channel_record.channel_id)
                     if channel:
                         try:
-                            await channel.send(f"<@{user_id}> leveled up to level {level}! 🎉")
+                            await channel.send(f"{user_name} leveled up to level {level}! 🎉")
                         except Exception as e:
                             print(f"Failed to send level up message in guild {channel_record.guild_id}, channel {channel_record.channel_id}: {e}")
             finally:
@@ -371,6 +371,34 @@ async def sync_commands(interaction: discord.Interaction):
             await interaction.response.send_message(f"Synced {len(synced)} command(s) with Discord.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"Failed to sync commands: {e}")
+    else:
+        await interaction.response.send_message("You are not authorized to use this command.", ephemeral=True)
+
+#Global level up test command
+@bot.tree.command(name="test_levelup", description="Only able to be used by the bot owner.")
+async def test_levelup(interaction: discord.Interaction):
+    if interaction.user.id == 769912339255263233:
+        try:
+            # Notify all level-up channels in all guilds
+            db = get_db()
+            try:
+                channels = db.query(LevelUpChannel).all()
+                for channel_record in channels:
+                    channel = bot.get_channel(channel_record.channel_id)
+                    if channel:
+                        try:
+                            await channel.send(f"Test User leveled up to level 99999999999! 🎉")
+                            await channel.send("This is a test level up message to all channels.")
+                            await interaction.response.send_message("Test level up message sent to all channels.", ephemeral=True)
+                        except Exception as e:
+                            print(f"Failed to send level up message in guild {channel_record.guild_id}, channel {channel_record.channel_id}: {e}")
+            finally:
+                db.close()
+        
+        except Exception as e:
+            print(f"Error during test level up: {e}")
+            await interaction.response.send_message("An error occurred while sending the test level up message.", ephemeral=True)
+        
     else:
         await interaction.response.send_message("You are not authorized to use this command.", ephemeral=True)
 
