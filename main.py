@@ -11,12 +11,12 @@ from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.exc import IntegrityError
 
-# Setting discord bot intents
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='/', intents=intents)
-
 # Loading .env
 load_dotenv()
+
+# Setting discord bot intents
+intents = discord.Intents.all()
+bot = commands.AutoShardedBot(command_prefix='/', intents=intents, shard_count=int((os.getenv("SHARD_AMOUNT") or 1)))
 
 # Database setup with SQLAlchemy
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -76,6 +76,16 @@ def get_db():
     finally:
         pass  # Don't close here, close in calling function
 
+def get_message_count():
+    db = get_db()
+    try:
+        count = db.query(MessageLog).count()
+        return count
+    except Exception:
+        return "?"
+    finally:
+        db.close()
+
 # Rotating status task
 async def rotate_status():
     await bot.wait_until_ready()
@@ -83,7 +93,7 @@ async def rotate_status():
         # Status 1: Number of servers
         server_count = len(bot.guilds)
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{server_count} servers"))
-        await asyncio.sleep(20)
+        await asyncio.sleep(1)
         # Status 2: Number of unique users tracked in the database
         try:
             db = get_db()
@@ -92,7 +102,12 @@ async def rotate_status():
         except Exception:
             user_count = "?"
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{user_count} users"))
+        await asyncio.sleep(1)
+
+        msg_count = get_message_count()
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{msg_count} messages looked at"))
         await asyncio.sleep(20)
+    
 
 # Event for when bot starts up
 @bot.event
@@ -247,6 +262,21 @@ async def log_message_to_db(message):
         db.commit()
     finally:
         db.close()
+
+#Messages server owner when the bot is added to a new server
+@bot.event
+async def on_guild_join(guild):
+    owner = guild.owner
+    if owner:
+        try:
+            embed = discord.Embed(
+                title="Thank you for adding me!",
+                description="I am a leveling bot that tracks user levels and XP in your server. Use `/add_levelup_channel` to set a channel for level-up notifications. \n\nTo see the leaderboard, use `/leaderboard`. \n\nJoin our server by typing `/invite` and share us with others to grow our bot.",
+                color=discord.Color.green()
+            )
+            await owner.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to send message to guild owner {owner.id} in guild {guild.id}: {e}")
 
 # Main message event
 @bot.event
