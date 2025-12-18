@@ -174,8 +174,8 @@ async def get_or_create_permanent_invite(guild):
 # Message logging function
 async def log_message_to_db(message):
     conn = sqlite3.connect(DATABASE)
-    wa_tz = pytz.timezone('Australia/Perth')
-    dt_wa = message.created_at.astimezone(wa_tz)
+    tz = pytz.timezone('Australia/Perth')
+    dt = message.created_at.astimezone(tz)
     message_content = get_message_content_with_attachments(message)
     message_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
     channel_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}"
@@ -199,7 +199,7 @@ async def log_message_to_db(message):
         channel_link,
         str(message.author),
         message.author.id,
-        dt_wa.strftime('%Y-%m-%d %H:%M:%S'),
+        dt.strftime('%Y-%m-%d %H:%M:%S'),
         message.guild.id,
         guild_invite_link
     ))
